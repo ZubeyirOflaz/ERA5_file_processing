@@ -7,3 +7,4 @@ reconfiguration easier.
 
 class system_config(NamedTuple):
     compression = False
+    save_location = None
