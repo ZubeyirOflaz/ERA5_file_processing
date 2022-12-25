@@ -8,3 +8,4 @@ reconfiguration easier.
 class system_config(NamedTuple):
     compression = False
     save_location = None
+    h3_save_resolution = 8
