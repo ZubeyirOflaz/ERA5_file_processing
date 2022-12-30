@@ -10,3 +10,6 @@ class system_config(NamedTuple):
     save_location = None
     h3_coarse_resolution = 5
     h3_fine_resolution = 10
+
+    # Maximum time chunk that is processed at a time (in hours)
+    processing_interval = 48

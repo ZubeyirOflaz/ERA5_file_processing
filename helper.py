@@ -3,7 +3,7 @@ from config import system_config
 import s3fs
 import xarray
 import h3.api.numpy_int as h3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def logging():
@@ -16,16 +16,19 @@ def retrieve_netcdf(file_path):
     remote_file_obj = fs_s3.open(file_path, mode="rb")
     return xarray.open_dataset(remote_file_obj, engine='h5netcdf')
 
+
 def pair_coordinates(lat, long):
     paired_list = [(elem1, elem2) for elem1 in lat for elem2 in long]
     return paired_list
 
+
 def apply_h3_array(latitude, longitude):
+    coordinates = [(lat, long) for lat in latitude for long in longitude]
     coarse_resolution = system_config.h3_coarse_resolution
-    h3_coarse_indexes = [h3.geo_to_h3(lat, lon, coarse_resolution) for lat, lon in zip(latitude, longitude)]
+    h3_coarse_indexes = [h3.geo_to_h3(i[0], i[1], coarse_resolution) for i in coordinates]
     fine_resolution = system_config.h3_fine_resolution
-    h3_fine_indexes = [h3.geo_to_h3(lat, lon, fine_resolution) for lat, lon in zip(latitude, longitude)]
-    return h3_coarse_indexes,h3_fine_indexes
+    h3_fine_indexes = [h3.geo_to_h3(i[0], i[1], fine_resolution) for i in coordinates]
+    return h3_coarse_indexes, h3_fine_indexes
 
 
 def return_h3_cells(h3_index):
@@ -49,9 +52,17 @@ def return_h3_cells(h3_index):
         return 'h3_fine', parent_cell
 
 
+def divide_time_period(start, end, interval):
+    interval = timedelta(hours=interval)
+    current_time = start
+    while current_time < end:
+        if current_time + interval < end:
+            yield [current_time, current_time +interval]
+        else:
+            yield [current_time, end]
+        current_time += interval
+
+
 def filter_by_time(date_from, date_to):
     # TODO: Add functionality to enable filtering by timestamp
     pass
-
-
-
