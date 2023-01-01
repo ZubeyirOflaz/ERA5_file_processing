@@ -6,6 +6,38 @@ import h3.api.numpy_int as h3
 from datetime import datetime, timedelta
 
 
+def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude_range=None):
+    # Parquet file name (same name with original netCDF file)
+    file_name = bucket_path.split('/')[-1].split('.')[0]
+    ncdf = hl.retrieve_netcdf(bucket_path)
+    times = ncdf['time1'].values
+    # Check if filters for time or location has been set
+    filter_provided = time_interval.count(None) < 2 or latitude_range != None < 2 or longitude_range != None
+
+    if system_config.save_only_filtered_data and filter_provided:
+        filter = {}
+        # Add coordinate filters if exists
+        if latitude_range is not None:
+            filter.update({'lat': slice(max(latitude_range), min(latitude_range))})
+        if longitude_range is not None:
+            filter.update({'lon': slice(min(longitude_range), max(longitude_range))})
+        ncdf = ncdf.sel(filter)
+        # Break time interval into processing chunks which can be set from config file
+        start = time_interval[0] if time_interval[0] else times[0]
+        end = time_interval[1] if time_interval[1] else times[-1]
+        processing_intervals = hl.divide_time_period(start, end, system_config.processing_interval)
+    else:
+        processing_intervals = hl.divide_time_period(times[0], times[-1], system_config.processing_interval)
+
+    latitudes = ncdf['lat'].values
+    longitudes = ncdf['lon'].values
+    num_coordinate_points = len(latitudes) * len(longitudes)
+    coarse_h3, fine_h3 = hl.apply_h3_array(latitudes, longitudes)
+
+    for interval in processing_intervals:
+        pass
+
+
 def logging():
     # TODO: implement logging for the system
     pass
@@ -66,3 +98,5 @@ def divide_time_period(start, end, interval):
 def filter_by_time(date_from, date_to):
     # TODO: Add functionality to enable filtering by timestamp
     pass
+
+
