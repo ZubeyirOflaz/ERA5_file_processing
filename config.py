@@ -6,10 +6,18 @@ reconfiguration easier.
 '''
 
 class system_config(NamedTuple):
-    compression = False
-    save_location = None
+    #Compression method for the final parquet file-
+    compression = 'snappy'
+
+    #Configures whether the data will be saved locally ('local') or to a AWS S3 bucket ('s_3')
+    save_location = 'local'
+
+    # Different h3 resolutions that will be appended
     h3_coarse_resolution = 5
     h3_fine_resolution = 10
 
     # Maximum time chunk that is processed at a time (in hours)
     processing_interval = 48
+
+    # Configures whether the data will be saved as a whole or filtered
+    save_only_filtered_data = True

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude_range=None):
     # Parquet file name (same name with original netCDF file)
     file_name = bucket_path.split('/')[-1].split('.')[0]
-    ncdf = hl.retrieve_netcdf(bucket_path)
+    ncdf = retrieve_netcdf(bucket_path)
     times = ncdf['time1'].values
     # Check if filters for time or location has been set
     filter_provided = time_interval.count(None) < 2 or latitude_range != None < 2 or longitude_range != None
@@ -25,14 +25,14 @@ def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude
         # Break time interval into processing chunks which can be set from config file
         start = time_interval[0] if time_interval[0] else times[0]
         end = time_interval[1] if time_interval[1] else times[-1]
-        processing_intervals = hl.divide_time_period(start, end, system_config.processing_interval)
+        processing_intervals = divide_time_period(start, end, system_config.processing_interval)
     else:
-        processing_intervals = hl.divide_time_period(times[0], times[-1], system_config.processing_interval)
+        processing_intervals = divide_time_period(times[0], times[-1], system_config.processing_interval)
 
     latitudes = ncdf['lat'].values
     longitudes = ncdf['lon'].values
     num_coordinate_points = len(latitudes) * len(longitudes)
-    coarse_h3, fine_h3 = hl.apply_h3_array(latitudes, longitudes)
+    coarse_h3, fine_h3 = apply_h3_array(latitudes, longitudes)
 
     for interval in processing_intervals:
         pass
