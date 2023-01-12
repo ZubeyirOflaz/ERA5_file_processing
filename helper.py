@@ -4,6 +4,9 @@ import s3fs
 import xarray
 import h3.api.numpy_int as h3
 from datetime import datetime, timedelta
+import numpy as np
+import pyarrow
+import pyarrow.parquet as pq
 
 
 def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude_range=None):
@@ -12,7 +15,7 @@ def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude
     ncdf = retrieve_netcdf(bucket_path)
     times = ncdf['time1'].values
     # Check if filters for time or location has been set
-    filter_provided = time_interval.count(None) < 2 or latitude_range != None < 2 or longitude_range != None
+    filter_provided = time_interval.count(None) < 2 or latitude_range != None or longitude_range != None
 
     if system_config.save_only_filtered_data and filter_provided:
         filter = {}
@@ -22,20 +25,47 @@ def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude
         if longitude_range is not None:
             filter.update({'lon': slice(min(longitude_range), max(longitude_range))})
         ncdf = ncdf.sel(filter)
+
         # Break time interval into processing chunks which can be set from config file
         start = time_interval[0] if time_interval[0] else times[0]
         end = time_interval[1] if time_interval[1] else times[-1]
-        processing_intervals = divide_time_period(start, end, system_config.processing_interval)
+        processing_intervals = list(divide_time_period(start, end, system_config.processing_interval))
     else:
-        processing_intervals = divide_time_period(times[0], times[-1], system_config.processing_interval)
+        processing_intervals = list(divide_time_period(times[0], times[-1], system_config.processing_interval))
+
+    # Get the relevant h3 coordinate values, and some helpful variables
 
     latitudes = ncdf['lat'].values
     longitudes = ncdf['lon'].values
     num_coordinate_points = len(latitudes) * len(longitudes)
     coarse_h3, fine_h3 = apply_h3_array(latitudes, longitudes)
+    prev_num_observations = 0
+    var_name = list(ncdf.keys())[1]
 
-    for interval in processing_intervals:
-        pass
+    for index, interval in enumerate(processing_intervals):
+        # Create current time filter, apply to the netcdf reader
+        filter.update({'time1': slice(interval[0], interval[1])})
+        ncdf_time_filtered = ncdf.sel(filter)
+
+        # Create the columnar arrays for the time and h3 values
+        time_values = ncdf_time_filtered['time1'].values
+        num_observations = len(time_values)
+        if num_observations != prev_num_observations:
+            coarse_h3_vals, fine_h3_vals = coarse_h3 * num_observations, fine_h3 * num_observations
+        time_values = np.repeat(time_values, num_coordinate_points)
+
+        # Retrieve the data, create the pyarrow table
+        observation_values = ncdf_time_filtered[var_name].values.flatten()
+        table = pyarrow.Table.from_arrays([coarse_h3_vals, fine_h3_vals, time_values, observation_values],
+                                          names=['h3_coarse_resolution', 'h3_fine_resolution', 'time', 'precipitation'])
+
+        # Create the Parquet writer, save the current batch of data
+        if index == 0:
+            pywriter = pq.ParquetWriter(f'{file_name}.parquet', table.schema, compression=system_config.compression)
+        pywriter.write(table)
+    if pywriter:
+        pywriter.close()
+    return ncdf_time_filtered
 
 
 def logging():
@@ -94,9 +124,24 @@ def divide_time_period(start, end, interval):
             yield [current_time, end]
         current_time += interval
 
+# Upload parquet file to an S3 bucket, the credentials have to be provided to boto3 for this function to execute using
+# one of the methods provided here https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html
 
-def filter_by_time(date_from, date_to):
-    # TODO: Add functionality to enable filtering by timestamp
-    pass
+
+# Read the parquet file either from the local instance or from an S3 bucket
+# Inputs either a filepath for the file or S3 file link, prioritizes the local instance if both are provided
+
+# Query local file with time and/or h3 index
+# Inputs a list of h3 cells for location filtering, and from/to datetime objects
+# Outputs the query result
+
+# Query S3 file with time and/or h3 index using S3 SELECT
+# Inputs a list of h3 cells for location filtering, and from/to datetime objects. Optionally a custom query can be
+# provided as a string the credentials have to be provided to boto3 for this function to execute using
+# one of the methods provided here https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html
+# Outputs the query result
+
+
+
 
 
