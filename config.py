@@ -21,3 +21,9 @@ class system_config(NamedTuple):
 
     # Configures whether the data will be saved as a whole or filtered
     save_only_filtered_data = True
+
+    # Configuration variables for file upload to S3 that enable concurrent upload if the file is larger than specified
+    # size
+
+    concurrent_transfer_threshold = 0.1 * (1024 ** 3) # Concurrent transfer enabled for files larger than 100MBs
+    max_concurrency = 2

@@ -7,24 +7,27 @@ from datetime import datetime, timedelta
 import numpy as np
 import pyarrow
 import pyarrow.parquet as pq
+import boto3
+from boto3.s3.transfer import TransferConfig
+from typing import List
 
 
 def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude_range=None):
     # Parquet file name (same name with original netCDF file)
     file_name = bucket_path.split('/')[-1].split('.')[0]
-    ncdf = retrieve_netcdf(bucket_path)
-    times = ncdf['time1'].values
+    netcdf = retrieve_netcdf(bucket_path)
+    times = netcdf['time1'].values
     # Check if filters for time or location has been set
-    filter_provided = time_interval.count(None) < 2 or latitude_range != None or longitude_range != None
+    filter_provided = time_interval.count(None) < 2 or latitude_range is not None or longitude_range is not None
+    netcdf_filter = {}
 
     if system_config.save_only_filtered_data and filter_provided:
-        filter = {}
         # Add coordinate filters if exists
         if latitude_range is not None:
-            filter.update({'lat': slice(max(latitude_range), min(latitude_range))})
+            netcdf_filter.update({'lat': slice(max(latitude_range), min(latitude_range))})
         if longitude_range is not None:
-            filter.update({'lon': slice(min(longitude_range), max(longitude_range))})
-        ncdf = ncdf.sel(filter)
+            netcdf_filter.update({'lon': slice(min(longitude_range), max(longitude_range))})
+        netcdf = netcdf.sel(netcdf_filter)
 
         # Break time interval into processing chunks which can be set from config file
         start = time_interval[0] if time_interval[0] else times[0]
@@ -35,37 +38,37 @@ def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude
 
     # Get the relevant h3 coordinate values, and some helpful variables
 
-    latitudes = ncdf['lat'].values
-    longitudes = ncdf['lon'].values
+    latitudes = netcdf['lat'].values
+    longitudes = netcdf['lon'].values
     num_coordinate_points = len(latitudes) * len(longitudes)
     coarse_h3, fine_h3 = apply_h3_array(latitudes, longitudes)
     prev_num_observations = 0
-    var_name = list(ncdf.keys())[1]
+    var_name = list(netcdf.keys())[1]
 
     for index, interval in enumerate(processing_intervals):
         # Create current time filter, apply to the netcdf reader
-        filter.update({'time1': slice(interval[0], interval[1])})
-        ncdf_time_filtered = ncdf.sel(filter)
+        netcdf_filter.update({'time1': slice(interval[0], interval[1])})
+        netcdf_time_filtered = netcdf.sel(netcdf_filter)
 
         # Create the columnar arrays for the time and h3 values
-        time_values = ncdf_time_filtered['time1'].values
+        time_values = netcdf_time_filtered['time1'].values
         num_observations = len(time_values)
         if num_observations != prev_num_observations:
-            coarse_h3_vals, fine_h3_vals = coarse_h3 * num_observations, fine_h3 * num_observations
+            coarse_h3_values, fine_h3_values = coarse_h3 * num_observations, fine_h3 * num_observations
         time_values = np.repeat(time_values, num_coordinate_points)
 
         # Retrieve the data, create the pyarrow table
-        observation_values = ncdf_time_filtered[var_name].values.flatten()
-        table = pyarrow.Table.from_arrays([coarse_h3_vals, fine_h3_vals, time_values, observation_values],
+        observation_values = netcdf_time_filtered[var_name].values.flatten()
+        table = pyarrow.Table.from_arrays([coarse_h3_values, fine_h3_values, time_values, observation_values],
                                           names=['h3_coarse_resolution', 'h3_fine_resolution', 'time', 'precipitation'])
 
         # Create the Parquet writer, save the current batch of data
         if index == 0:
-            pywriter = pq.ParquetWriter(f'{file_name}.parquet', table.schema, compression=system_config.compression)
-        pywriter.write(table)
-    if pywriter:
-        pywriter.close()
-    return ncdf_time_filtered
+            py_writer = pq.ParquetWriter(f'{file_name}.parquet', table.schema, compression=system_config.compression)
+        py_writer.write(table)
+    if py_writer:
+        py_writer.close()
+    return netcdf_time_filtered
 
 
 def logging():
@@ -97,7 +100,8 @@ def return_h3_cells(h3_index):
     # This function gets a h3 cell and returns the associated h3 cells in the database
     # It gets an h3 index as an input and returns the h3 reolution level and associated cells from that level
     # as the output.
-
+    if not h3.h3_is_valid(h3_index):
+        raise TypeError('h3 index is not valid, please make sure to provide a valid h3 index')
     # Check if resolution lower than saved coarse resolution
     if h3.h3_get_resolution(h3_index) <= system_config.h3_coarse_resolution:
         # if h3 index requested is bigger than saved resolution format, retun the associated children
@@ -110,7 +114,7 @@ def return_h3_cells(h3_index):
         return 'h3_fine', children_cells
     else:
         # if h3 index requested is smaller than the saved fine resolution, return the parent cell
-        parent_cell = h3.h3_to_parent(h3_index, system_config.h3_save_resolution)
+        parent_cell = h3.h3_to_parent(h3_index, system_config.h3_fine_resolution)
         return 'h3_fine', parent_cell
 
 
@@ -119,13 +123,26 @@ def divide_time_period(start, end, interval):
     current_time = start
     while current_time < end:
         if current_time + interval < end:
-            yield [current_time, current_time +interval]
+            yield [current_time, current_time + interval]
         else:
             yield [current_time, end]
         current_time += interval
 
+
 # Upload parquet file to an S3 bucket, the credentials have to be provided to boto3 for this function to execute using
 # one of the methods provided here https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html
+
+def upload_to_bucket(bucket_name, filename):
+    s3_session = boto3.client('s3')
+    config = TransferConfig(multipart_threshold=system_config.concurrent_transfer_threshold,
+                            max_concurrency=system_config.max_concurrency)
+
+    try:
+        s3_session.upload_file(filename, bucket_name, filename, Config=config)
+    except Exception as e:
+        print('system encountered an error uploading the file')
+        print(e)
+        raise ConnectionError
 
 
 # Read the parquet file either from the local instance or from an S3 bucket
@@ -141,7 +158,10 @@ def divide_time_period(start, end, interval):
 # one of the methods provided here https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html
 # Outputs the query result
 
-
-
-
-
+def query_s3(bucket_name, filename, start_date : datetime = None,
+             end_date: datetime = None, h3_cell_list : List[int] = None):
+    s3_filter = ''
+    if start_date is not None and end_date is not None:
+        s3_filter += 'WHERE s.time '
+    query = f'SELECT * FROM s3object s {s3_filter}'
+    pass
