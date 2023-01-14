@@ -10,6 +10,8 @@ import pyarrow.parquet as pq
 import boto3
 from boto3.s3.transfer import TransferConfig
 from typing import List
+from io import StringIO
+import pandas as pd
 
 
 def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude_range=None):
@@ -158,10 +160,57 @@ def upload_to_bucket(bucket_name, filename):
 # one of the methods provided here https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html
 # Outputs the query result
 
-def query_s3(bucket_name, filename, start_date : datetime = None,
-             end_date: datetime = None, h3_cell_list : List[int] = None):
-    s3_filter = ''
-    if start_date is not None and end_date is not None:
-        s3_filter += 'WHERE s.time '
+def query_s3(bucket_name, filename, custom_query: str = None, from_date: datetime = None,
+             to_date: datetime = None, h3_cell_filter: int = None, limit: int = 100):
+    date_format = "%Y-%m-%dT%H:%M:%S.000Z"
+    if custom_query is not None:
+        s3_filter = custom_query
+    else:
+        s3_filter = ''
+        # Appending time filters for the query if they are provided
+        if from_date is not None and to_date is not None:
+            s3_filter += f"WHERE CAST(s.observation_time as TIMESTAMP) BETWEEN CAST('{from_date.strftime(date_format)}'" \
+                         f" as TIMESTAMP) AND CAST('{from_date.strftime(date_format)}' as TIMESTAMP)"
+        elif from_date is not None:
+            s3_filter += f"WHERE CAST(s.observation_time as TIMESTAMP) > CAST('{from_date.strftime(date_format)}'" \
+                         f" as TIMESTAMP)"
+        elif to_date is not None:
+            s3_filter += f"WHERE CAST(s.observation_time as TIMESTAMP) < CAST('{to_date.strftime(date_format)}'" \
+                         f" as TIMESTAMP)"
+        # Appending location filter if it is provided
+        if h3_cell_filter is not None:
+            h3_resolution, relevant_h3_cells = return_h3_cells(h3_cell_filter)
+            col_name = h3_resolution + '_resolution'
+            h3_string = str(tuple(relevant_h3_cells))
+            if len(s3_filter) == 0:
+                s3_filter += ' WHERE'
+            else:
+                s3_filter += ' AND'
+            s3_filter += f' s.{col_name} IN {h3_string} LIMIT {limit}'
+
     query = f'SELECT * FROM s3object s {s3_filter}'
-    pass
+    s3_query = boto3.client('s3')
+    try:
+        response = s3_query.select_object_content(
+            Bucket=bucket_name,
+            Key=filename,
+            ExpressionType='SQL',
+            Expression=query,
+            InputSerialization={'Parquet': {}},
+            OutputSerialization={'JSON': {}}, )
+    except Exception as e:
+        print('system encountered the following error while querying the results')
+        print(e)
+        raise ConnectionError
+    if response['ResponseMetadata']['HTTPStatusCode'] == 200:
+        for event in response['Payload']:
+            if 'Records' in event:
+                data = event['Records']['Payload'].decode('utf-8')
+                # data = StringIO(data)
+                # dataframe = pd.read_json(data, lines=True)
+    else:
+        status_code = response['ResponseMetadata']['HTTPStatusCode']
+        return response
+        raise ConnectionError(f'S3 Select returned with the following error code: {status_code}')
+
+    return data, response
