@@ -9,20 +9,22 @@ import pyarrow
 import pyarrow.parquet as pq
 import boto3
 from boto3.s3.transfer import TransferConfig
+import json
 from typing import List
 from io import StringIO
 import pandas as pd
 
 
-def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude_range=None):
-    # Parquet file name (same name with original netCDF file)
+def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude_range=None, verbose=False):
+    # Parquet file name (currently set to the same name with original netCDF file)
     file_name = bucket_path.split('/')[-1].split('.')[0]
     netcdf = retrieve_netcdf(bucket_path)
     times = netcdf['time1'].values
     # Check if filters for time or location has been set
     filter_provided = time_interval.count(None) < 2 or latitude_range is not None or longitude_range is not None
     netcdf_filter = {}
-
+    if verbose:
+        print('Filtering data')
     if system_config.save_only_filtered_data and filter_provided:
         # Add coordinate filters if exists
         if latitude_range is not None:
@@ -39,7 +41,8 @@ def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude
         processing_intervals = list(divide_time_period(times[0], times[-1], system_config.processing_interval))
 
     # Get the relevant h3 coordinate values, and some helpful variables
-
+    if verbose:
+        'Creating h3 cell indices for the data'
     latitudes = netcdf['lat'].values
     longitudes = netcdf['lon'].values
     num_coordinate_points = len(latitudes) * len(longitudes)
@@ -48,12 +51,15 @@ def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude
     var_name = list(netcdf.keys())[1]
 
     for index, interval in enumerate(processing_intervals):
+        print(f'Retrieving data: {(index / len(processing_intervals)) * 100}% complete')
         # Create current time filter, apply to the netcdf reader
         netcdf_filter.update({'time1': slice(interval[0], interval[1])})
         netcdf_time_filtered = netcdf.sel(netcdf_filter)
 
         # Create the columnar arrays for the time and h3 values
         time_values = netcdf_time_filtered['time1'].values
+        if verbose:
+            'Saving the latest downloaded partial the data'
         num_observations = len(time_values)
         if num_observations != prev_num_observations:
             coarse_h3_values, fine_h3_values = coarse_h3 * num_observations, fine_h3 * num_observations
@@ -62,12 +68,15 @@ def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude
         # Retrieve the data, create the pyarrow table
         observation_values = netcdf_time_filtered[var_name].values.flatten()
         table = pyarrow.Table.from_arrays([coarse_h3_values, fine_h3_values, time_values, observation_values],
-                                          names=['h3_coarse_resolution', 'h3_fine_resolution', 'time', 'precipitation'])
+                                          names=['h3_coarse_resolution', 'h3_fine_resolution',
+                                                 'observation_time', 'precipitation'])
 
         # Create the Parquet writer, save the current batch of data
         if index == 0:
             py_writer = pq.ParquetWriter(f'{file_name}.parquet', table.schema, compression=system_config.compression)
         py_writer.write(table)
+    if verbose:
+        print('Download and conversion completed, closing the file')
     if py_writer:
         py_writer.close()
     return netcdf_time_filtered
@@ -150,13 +159,9 @@ def upload_to_bucket(bucket_name, filename):
 # Read the parquet file either from the local instance or from an S3 bucket
 # Inputs either a filepath for the file or S3 file link, prioritizes the local instance if both are provided
 
-# Query local file with time and/or h3 index
-# Inputs a list of h3 cells for location filtering, and from/to datetime objects
-# Outputs the query result
-
 # Query S3 file with time and/or h3 index using S3 SELECT
 # Inputs a list of h3 cells for location filtering, and from/to datetime objects. Optionally a custom query can be
-# provided as a string the credentials have to be provided to boto3 for this function to execute using
+# provided as a string. The credentials have to be provided to boto3 for this function to execute using
 # one of the methods provided here https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html
 # Outputs the query result
 
@@ -170,7 +175,7 @@ def query_s3(bucket_name, filename, custom_query: str = None, from_date: datetim
         # Appending time filters for the query if they are provided
         if from_date is not None and to_date is not None:
             s3_filter += f"WHERE CAST(s.observation_time as TIMESTAMP) BETWEEN CAST('{from_date.strftime(date_format)}'" \
-                         f" as TIMESTAMP) AND CAST('{from_date.strftime(date_format)}' as TIMESTAMP)"
+                         f" as TIMESTAMP) AND CAST('{to_date.strftime(date_format)}' as TIMESTAMP)"
         elif from_date is not None:
             s3_filter += f"WHERE CAST(s.observation_time as TIMESTAMP) > CAST('{from_date.strftime(date_format)}'" \
                          f" as TIMESTAMP)"
@@ -206,11 +211,30 @@ def query_s3(bucket_name, filename, custom_query: str = None, from_date: datetim
         for event in response['Payload']:
             if 'Records' in event:
                 data = event['Records']['Payload'].decode('utf-8')
-                # data = StringIO(data)
+                ndjson_obj = json.loads('[{}]'.format(data.replace('\n', ',')[:-1]))
                 # dataframe = pd.read_json(data, lines=True)
     else:
         status_code = response['ResponseMetadata']['HTTPStatusCode']
-        return response
         raise ConnectionError(f'S3 Select returned with the following error code: {status_code}')
 
-    return data, response
+    return json.dumps(ndjson_obj)
+
+
+# Query local file with time and/or h3 index
+# Inputs a list of h3 cells for location filtering, and from/to datetime objects
+# Outputs the query result
+def query_local(filename, from_date: datetime = None,
+                to_date: datetime = None, h3_cell_filter: int = None):
+    table = pq.read_table(filename)
+    mask = [True] * len(table)
+    if from_date is not None:
+        mask = mask and table.column('observation_time').to_numpy() > from_date
+    if to_date is not None:
+        mask = np.logical_and(mask, (table.column('observation_time').to_numpy() < to_date))
+    if h3_cell_filter is not None:
+        h3_resolution, relevant_h3_cells = return_h3_cells(h3_cell_filter)
+        col_name = h3_resolution + '_resolution'
+        cells = set(relevant_h3_cells)
+        cell_mask = [i in cells for i in table.column(col_name).to_numpy()]
+        mask = np.logical_and(mask, cell_mask)
+    return table.filter(mask)
