@@ -1,0 +1,229 @@
+{
+	"info": {
+		"_postman_id": "373ed769-bf8a-495e-a439-a9d0d0ef3e1d",
+		"name": "NetCDF to Parquet Requests",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Ingest ERA 5 file",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8000/ingest_file/2022_05?from_date=2022_05_01_01&to_date=2022_05_02_01&latitude_min=20&latitude_max=25&longitude_min=10&longitude_max=15",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8000",
+					"path": [
+						"ingest_file",
+						"2022_05"
+					],
+					"query": [
+						{
+							"key": "from_date",
+							"value": "2022_05_01_01"
+						},
+						{
+							"key": "to_date",
+							"value": "2022_05_02_01"
+						},
+						{
+							"key": "latitude_min",
+							"value": "20"
+						},
+						{
+							"key": "latitude_max",
+							"value": "25"
+						},
+						{
+							"key": "longitude_min",
+							"value": "10"
+						},
+						{
+							"key": "longitude_max",
+							"value": "15"
+						}
+					]
+				}
+			},
+			"response": [
+				{
+					"name": "Get User",
+					"originalRequest": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "https://reqres.in/api/users/2",
+							"protocol": "https",
+							"host": [
+								"reqres",
+								"in"
+							],
+							"path": [
+								"api",
+								"users",
+								"2"
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Date",
+							"value": "Tue, 28 Jul 2020 12:31:25 GMT"
+						},
+						{
+							"key": "Content-Type",
+							"value": "application/json; charset=utf-8"
+						},
+						{
+							"key": "Transfer-Encoding",
+							"value": "chunked"
+						},
+						{
+							"key": "Connection",
+							"value": "keep-alive"
+						},
+						{
+							"key": "Set-Cookie",
+							"value": "__cfduid=daf025c82d7d49f43bc90b6ac61e4be041595939485; expires=Thu, 27-Aug-20 12:31:25 GMT; path=/; domain=.reqres.in; HttpOnly; SameSite=Lax; Secure"
+						},
+						{
+							"key": "X-Powered-By",
+							"value": "Express"
+						},
+						{
+							"key": "Access-Control-Allow-Origin",
+							"value": "*"
+						},
+						{
+							"key": "Etag",
+							"value": "W/\"173-1Z8bn0V7UjH6FK7NCaza1ccWXQk\""
+						},
+						{
+							"key": "Via",
+							"value": "1.1 vegur"
+						},
+						{
+							"key": "Cache-Control",
+							"value": "max-age=14400"
+						},
+						{
+							"key": "CF-Cache-Status",
+							"value": "REVALIDATED"
+						},
+						{
+							"key": "cf-request-id",
+							"value": "0437010e5400009ccfcc931200000001"
+						},
+						{
+							"key": "Expect-CT",
+							"value": "max-age=604800, report-uri=\"https://report-uri.cloudflare.com/cdn-cgi/beacon/expect-ct\""
+						},
+						{
+							"key": "Vary",
+							"value": "Accept-Encoding"
+						},
+						{
+							"key": "Server",
+							"value": "cloudflare"
+						},
+						{
+							"key": "CF-RAY",
+							"value": "5b9e9df6eefa9ccf-AMS"
+						},
+						{
+							"key": "Content-Encoding",
+							"value": "br"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"data\": {\n        \"id\": 2,\n        \"email\": \"janet.weaver@reqres.in\",\n        \"first_name\": \"Janet\",\n        \"last_name\": \"Weaver\",\n        \"avatar\": \"https://s3.amazonaws.com/uifaces/faces/twitter/josephstein/128.jpg\"\n    },\n    \"ad\": {\n        \"company\": \"StatusCode Weekly\",\n        \"url\": \"http://statuscode.org/\",\n        \"text\": \"A weekly newsletter focusing on software development, infrastructure, the server, performance, and the stack end of things.\"\n    }\n}"
+				}
+			]
+		},
+		{
+			"name": "query_local_file",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8000/query_local_data/precipitation_amount_1hour_Accumulation.parquet?from_date=2022_05_01_01&to_date=2022_05_02_05&h3_cell_filter=595032156531589119",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8000",
+					"path": [
+						"query_local_data",
+						"precipitation_amount_1hour_Accumulation.parquet"
+					],
+					"query": [
+						{
+							"key": "from_date",
+							"value": "2022_05_01_01"
+						},
+						{
+							"key": "to_date",
+							"value": "2022_05_02_05"
+						},
+						{
+							"key": "h3_cell_filter",
+							"value": "595032156531589119"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "query_s3_bucket",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8000/query_local_data/s3sandcastle-precipitation_amount_1hour_Accumulation.parquet?from_date=2022_05_01_01&to_date=2022_05_02_05&h3_cell_filter=595032156531589119",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8000",
+					"path": [
+						"query_local_data",
+						"s3sandcastle-precipitation_amount_1hour_Accumulation.parquet"
+					],
+					"query": [
+						{
+							"key": "from_date",
+							"value": "2022_05_01_01"
+						},
+						{
+							"key": "to_date",
+							"value": "2022_05_02_05"
+						},
+						{
+							"key": "h3_cell_filter",
+							"value": "595032156531589119"
+						}
+					]
+				}
+			},
+			"response": []
+		}
+	],
+	"protocolProfileBehavior": {}
+}
