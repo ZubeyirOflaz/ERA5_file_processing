@@ -9,15 +9,20 @@ class system_config(NamedTuple):
     #Compression method for the final parquet file-
     compression = 'snappy'
 
-    #Configures whether the data will be saved locally ('local') or to a AWS S3 bucket ('s_3')
+    # Configures whether the data will be saved locally ('local'), to both AWS S3 bucket and local ('both') or
+    # only to an s3 bucket ('s3')
     save_location = 'local'
+
+    # Maximum number of retries and wait time between retries during the operations when an error is encountered
+    max_retries = 5
+    wait_time = 15
 
     # Different h3 resolutions that will be appended
     h3_coarse_resolution = 5
     h3_fine_resolution = 10
 
-    # Maximum time chunk that is processed at a time (in hours)
-    processing_interval = 48
+    # Maximum time chunk that is processed during partial download a time (in hours)
+    processing_interval = 12
 
     # Configures whether the data will be saved as a whole or filtered
     save_only_filtered_data = True

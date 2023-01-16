@@ -13,12 +13,35 @@ import json
 from typing import List
 from io import StringIO
 import pandas as pd
+import logging
+import os
+
+logging.basicConfig(filename='system_logs.log', level=logging.DEBUG)
 
 
-def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude_range=None, verbose=False):
+def convert_store_data(bucket_path, time_interval=(None, None), latitude_range=None,
+                       longitude_range=None, verbose=False, upload_bucket_name: str = None):
     # Parquet file name (currently set to the same name with original netCDF file)
     file_name = bucket_path.split('/')[-1].split('.')[0]
-    netcdf = retrieve_netcdf(bucket_path)
+    file_name += '.parquet'
+    # Connecting to the NetCDF file
+    retries = 0
+    if verbose:
+        print('Connecting to the NetCDF file')
+    while retries < system_config.max_retries:
+        logging.debug('Connecting to the NetCDF file')
+        try:
+            netcdf = retrieve_netcdf(bucket_path)
+            break
+        except Exception as e:
+            if retries < system_config.max_retries:
+                logging.warning(f'Error: {e} occured while connecting to the system. Will retry connecting '
+                                f'in {system_config.wait_time} seconds')
+            else:
+                logging.error(f'Connection establishment failed with error: {e}. Please check for any issues in '
+                              f'internet connection or the access to the S3 file')
+                raise ConnectionError
+    retries = 0
     times = netcdf['time1'].values
     # Check if filters for time or location has been set
     filter_provided = time_interval.count(None) < 2 or latitude_range is not None or longitude_range is not None
@@ -51,15 +74,28 @@ def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude
     var_name = list(netcdf.keys())[1]
 
     for index, interval in enumerate(processing_intervals):
-        print(f'Retrieving data: {(index / len(processing_intervals)) * 100}% complete')
+        if verbose:
+            print(f'Retrieving data: {round((index / len(processing_intervals)) * 100, 2)}% complete')
         # Create current time filter, apply to the netcdf reader
         netcdf_filter.update({'time1': slice(interval[0], interval[1])})
         netcdf_time_filtered = netcdf.sel(netcdf_filter)
-
+        while retries < system_config.max_retries:
+            logging.debug('Accessing the partial data to be read')
+            try:
+                time_values = netcdf_time_filtered['time1'].values
+                break
+            except Exception as e:
+                if retries < system_config.max_retries:
+                    logging.warning(f'Error: {e} occured while retrieving data. Will retry connecting '
+                                    f'in {system_config.wait_time} seconds')
+                else:
+                    logging.error(f'Connection establishment failed with error: {e}. Please check for any issues in '
+                                  f'internet connection or the access to the S3 file')
+                    raise ConnectionError
+        retries = 0
         # Create the columnar arrays for the time and h3 values
-        time_values = netcdf_time_filtered['time1'].values
         if verbose:
-            'Saving the latest downloaded partial the data'
+            print('Saving the latest downloaded partial data')
         num_observations = len(time_values)
         if num_observations != prev_num_observations:
             coarse_h3_values, fine_h3_values = coarse_h3 * num_observations, fine_h3 * num_observations
@@ -73,18 +109,26 @@ def main(bucket_path, time_interval=(None, None), latitude_range=None, longitude
 
         # Create the Parquet writer, save the current batch of data
         if index == 0:
-            py_writer = pq.ParquetWriter(f'{file_name}.parquet', table.schema, compression=system_config.compression)
+            py_writer = pq.ParquetWriter(f'{file_name}', table.schema, compression=system_config.compression)
         py_writer.write(table)
     if verbose:
         print('Download and conversion completed, closing the file')
     if py_writer:
         py_writer.close()
-    return netcdf_time_filtered
+    if system_config.save_location in ['both', 's3']:
+        upload_success = upload_to_bucket(upload_bucket_name, file_name)
+        if not upload_success:
+            logging.error('The system was unable to upload the file to the specified S3 bucket, Please ensure '
+                          'stable internet connection and required access to the specified S3 bucket')
+        else:
+            logging.info('The upload of the file is complete')
+        if system_config.save_location == 's3' and upload_success:
+            os.remove(file_name)
+            logging.info('The local file instance is removed')
 
 
-def logging():
-    # TODO: implement logging for the system
-    pass
+    return file_name
+
 
 
 def retrieve_netcdf(file_path):
@@ -154,6 +198,7 @@ def upload_to_bucket(bucket_name, filename):
         print('system encountered an error uploading the file')
         print(e)
         raise ConnectionError
+    return True
 
 
 # Read the parquet file either from the local instance or from an S3 bucket
@@ -211,13 +256,13 @@ def query_s3(bucket_name, filename, custom_query: str = None, from_date: datetim
         for event in response['Payload']:
             if 'Records' in event:
                 data = event['Records']['Payload'].decode('utf-8')
-                ndjson_obj = json.loads('[{}]'.format(data.replace('\n', ',')[:-1]))
+                json_obj = json.loads('[{}]'.format(data.replace('\n', ',')[:-1]))
                 # dataframe = pd.read_json(data, lines=True)
     else:
         status_code = response['ResponseMetadata']['HTTPStatusCode']
         raise ConnectionError(f'S3 Select returned with the following error code: {status_code}')
 
-    return json.dumps(ndjson_obj)
+    return json.dumps(json_obj)
 
 
 # Query local file with time and/or h3 index
@@ -225,16 +270,16 @@ def query_s3(bucket_name, filename, custom_query: str = None, from_date: datetim
 # Outputs the query result
 def query_local(filename, from_date: datetime = None,
                 to_date: datetime = None, h3_cell_filter: int = None):
-    table = pq.read_table(filename)
-    mask = [True] * len(table)
+
+    filter = []
     if from_date is not None:
-        mask = mask and table.column('observation_time').to_numpy() > from_date
+        filter.append(('observation_time', '>', from_date))
     if to_date is not None:
-        mask = np.logical_and(mask, (table.column('observation_time').to_numpy() < to_date))
+        filter.append(('observation_time', '<', to_date))
     if h3_cell_filter is not None:
         h3_resolution, relevant_h3_cells = return_h3_cells(h3_cell_filter)
         col_name = h3_resolution + '_resolution'
-        cells = set(relevant_h3_cells)
-        cell_mask = [i in cells for i in table.column(col_name).to_numpy()]
-        mask = np.logical_and(mask, cell_mask)
-    return table.filter(mask)
+        relevant_h3_cells = set(relevant_h3_cells)
+        filter.append((col_name, 'in', relevant_h3_cells))
+    table = pq.read_table(filename, filters=filter)
+    return table
