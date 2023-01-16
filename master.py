@@ -31,6 +31,9 @@ if __name__ == "__main__":
     # Query to local parquet file
     filtered_table = hl.query_local(file_name,
                                     query_from_date, query_to_date, query_location)
+    filtered_table = filtered_table.to_pandas()
+    filtered_table.to_csv(f'{file_name.split(".")[0]}_query_result.csv')
+    print('Query results from the parquet file has been saved as a csv file')
     # Query the S3 bucket. Please provide bucket name and required credentials before testing
     credentials_provided = False
     if credentials_provided:

@@ -75,7 +75,7 @@ def convert_store_data(bucket_path, time_interval=(None, None), latitude_range=N
 
     for index, interval in enumerate(processing_intervals):
         if verbose:
-            print(f'Retrieving data: {round((index / len(processing_intervals)) * 100, 2)}% complete')
+            print(f'Retrieving and saving data: {round((index / len(processing_intervals)) * 100, 2)}% complete')
         # Create current time filter, apply to the netcdf reader
         netcdf_filter.update({'time1': slice(interval[0], interval[1])})
         netcdf_time_filtered = netcdf.sel(netcdf_filter)
@@ -94,8 +94,6 @@ def convert_store_data(bucket_path, time_interval=(None, None), latitude_range=N
                     raise ConnectionError
         retries = 0
         # Create the columnar arrays for the time and h3 values
-        if verbose:
-            print('Saving the latest downloaded partial data')
         num_observations = len(time_values)
         if num_observations != prev_num_observations:
             coarse_h3_values, fine_h3_values = coarse_h3 * num_observations, fine_h3 * num_observations
